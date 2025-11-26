@@ -33,13 +33,21 @@ export default async function handler(req, res) {
     return;
   }
 
+  // 👉 PON AQUÍ LOS IDs REALES DE CADA TABLA
+  const TABLE_ALOJAMIENTOS = "tbl8l5yXMFMNE5v5e";     // alojamientos
+  const TABLE_RESTAURANTES = "tblKeZSdLgvidj9Qj";    // restaurantes
+  const TABLE_EXPERIENCIAS = "tblOaarE2MmWhMUef";    // experiencias
+  const TABLE_PLAYAS = "tblbf2wiRYFMFLLZQ";        // playas_caninas
+
   const headers = {
     Authorization: `Bearer ${token}`,
   };
 
-  async function fetchTable(tableName) {
+  async function fetchTable(tableIdOrName) {
     const url = new URL(
-      `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(tableName)}`
+      `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(
+        tableIdOrName
+      )}`
     );
 
     const filtros = [];
@@ -55,15 +63,15 @@ export default async function handler(req, res) {
         filtros.length === 1 ? filtros[0] : `AND(${filtros.join(",")})`;
       url.searchParams.set("filterByFormula", formula);
     }
-url.searchParams.set("view", "Grid view");
 
+    url.searchParams.set("view", "Grid view");
     url.searchParams.set("maxRecords", "20");
 
     const resp = await fetch(url.toString(), { headers });
     if (!resp.ok) {
       const text = await resp.text();
       throw new Error(
-        `Error al consultar Airtable (${tableName}): ${resp.status} - ${text}`
+        `Error al consultar Airtable (${tableIdOrName}): ${resp.status} - ${text}`
       );
     }
     const data = await resp.json();
@@ -84,10 +92,10 @@ url.searchParams.set("view", "Grid view");
       experienciasRaw,
       playasRaw,
     ] = await Promise.all([
-      fetchTable("alojamientos"),
-      fetchTable("restaurantes"),
-      fetchTable("experiencias"),
-      quiere_playa ? fetchTable("playas_caninas") : Promise.resolve([]),
+      fetchTable(TABLE_ALOJAMIENTOS),
+      fetchTable(TABLE_RESTAURANTES),
+      fetchTable(TABLE_EXPERIENCIAS),
+      quiere_playa ? fetchTable(TABLE_PLAYAS) : Promise.resolve([]),
     ]);
 
     let alojamientos = mapRecords(alojamientosRaw);
