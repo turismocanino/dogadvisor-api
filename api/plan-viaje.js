@@ -55,6 +55,7 @@ export default async function handler(req, res) {
         filtros.length === 1 ? filtros[0] : `AND(${filtros.join(",")})`;
       url.searchParams.set("filterByFormula", formula);
     }
+url.searchParams.set("view", "Grid view");
 
     url.searchParams.set("maxRecords", "20");
 
