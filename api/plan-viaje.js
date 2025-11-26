@@ -83,10 +83,10 @@ export default async function handler(req, res) {
       experienciasRaw,
       playasRaw,
     ] = await Promise.all([
-      fetchTable("alojamientos"),
-      fetchTable("restaurantes"),
-      fetchTable("experiencias"),
-      quiere_playa ? fetchTable("playas_caninas") : Promise.resolve([]),
+      fetchTable("Alojamientos"),
+      fetchTable("Restaurantes"),
+      fetchTable("Experiencias"),
+      quiere_playa ? fetchTable("Playas caninas") : Promise.resolve([]),
     ]);
 
     let alojamientos = mapRecords(alojamientosRaw);
