@@ -90,8 +90,9 @@ export default async function handler(req, res) {
     url.searchParams.set("view", "Grid view");
     url.searchParams.set("maxRecords", "20");
 
-    const formula = buildFilterFormula();
-    if (formula) url.searchParams.set("filterByFormula", formula);
+    // const formula = buildFilterFormula();
+// if (formula) url.searchParams.set("filterByFormula", formula);
+
 
     const attempt = async () => fetchWithTimeout(url.toString(), 8000);
 
