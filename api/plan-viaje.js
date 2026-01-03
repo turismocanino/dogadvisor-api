@@ -57,7 +57,7 @@ export default async function handler(req, res) {
   const includePlayas = quiere_playa !== false;
 
   // Escape para filterByFormula
-  const esc = (v) => String(v).replace(/'/g, "\\'");
+  const esc = (v) => String(v ?? "").replace(/'/g, "\\'");
 
   function buildFilterFormula() {
     const filtros = [];
@@ -70,6 +70,59 @@ export default async function handler(req, res) {
     return filtros.length === 1 ? filtros[0] : `AND(${filtros.join(",")})`;
   }
 
+  function normalizeStr(v) {
+    return String(v || "").trim().toLowerCase();
+  }
+
+  // “mezcla” reproducible por request
+  function seededRandom(seedStr) {
+    let h = 2166136261;
+    for (let i = 0; i < seedStr.length; i++) {
+      h ^= seedStr.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return function () {
+      h += h << 13;
+      h ^= h >>> 7;
+      h += h << 3;
+      h ^= h >>> 17;
+      h += h << 5;
+      return ((h >>> 0) % 10000) / 10000;
+    };
+  }
+
+  function seededShuffle(arr, seedStr) {
+    const rand = seededRandom(seedStr);
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  function uniqById(arr) {
+    const seen = new Set();
+    const out = [];
+    for (const item of arr || []) {
+      if (!item?.id || seen.has(item.id)) continue;
+      seen.add(item.id);
+      out.push(item);
+    }
+    return out;
+  }
+
+  function matchesMunicipioOrZona(item, municipio, zona) {
+    const m = normalizeStr(item.municipio);
+    const z = normalizeStr(item.zona);
+    const targetM = normalizeStr(municipio);
+    const targetZ = normalizeStr(zona);
+
+    if (targetM) return m === targetM;
+    if (targetZ) return z === targetZ;
+    return true;
+  }
+
   async function fetchWithTimeout(url, ms) {
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), ms);
@@ -80,46 +133,76 @@ export default async function handler(req, res) {
     }
   }
 
-  async function fetchTable(tableIdOrName) {
-    const url = new URL(
-      `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(tableIdOrName)}`
-    );
+  /**
+   * Airtable paginación por offset.
+   * - pageSize: hasta 100 (máximo Airtable)
+   * - hardLimit: límite de seguridad (ajústalo si quieres)
+   */
+  async function fetchAllRecords(tableIdOrName, { hardLimit = 800 } = {}) {
+    const formula = buildFilterFormula();
 
-    // Recomendación: crea una vista estable (por ejemplo "api_public") y usa esa.
-    // De momento lo dejo en "Grid view" para no tocar tu Airtable.
-    url.searchParams.set("view", "Grid view");
-    url.searchParams.set("maxRecords", "20");
+    let all = [];
+    let offset = null;
+    let loops = 0;
 
-    // const formula = buildFilterFormula();
-// if (formula) url.searchParams.set("filterByFormula", formula);
+    while (true) {
+      loops += 1;
+      if (loops > 30) break; // seguridad extra
 
-
-    const attempt = async () => fetchWithTimeout(url.toString(), 8000);
-
-    // 1 intento + 1 reintento corto para abort/timeout
-    let resp;
-    try {
-      resp = await attempt();
-    } catch (e) {
-      await new Promise((r) => setTimeout(r, 400));
-      resp = await attempt();
-    }
-
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      const err = new Error(
-        `Error al consultar Airtable (${tableIdOrName}): ${resp.status} - ${text.slice(0, 300)}`
+      const url = new URL(
+        `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(
+          tableIdOrName
+        )}`
       );
-      err.status = resp.status;
-      throw err;
+
+      // Recomiendo crear una vista "api_public" sin filtros ni orden raro.
+      // De momento mantenemos "Grid view" para no tocar Airtable.
+      url.searchParams.set("view", "Grid view");
+      url.searchParams.set("pageSize", "100");
+
+      if (formula) url.searchParams.set("filterByFormula", formula);
+      if (offset) url.searchParams.set("offset", offset);
+
+      const attempt = async () => fetchWithTimeout(url.toString(), 10000);
+
+      let resp;
+      try {
+        resp = await attempt();
+      } catch (e) {
+        await new Promise((r) => setTimeout(r, 500));
+        resp = await attempt();
+      }
+
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => "");
+        const err = new Error(
+          `Error al consultar Airtable (${tableIdOrName}): ${resp.status} - ${text.slice(
+            0,
+            300
+          )}`
+        );
+        err.status = resp.status;
+        throw err;
+      }
+
+      const data = await resp.json();
+      const batch = data.records || [];
+      all.push(...batch);
+
+      if (all.length >= hardLimit) {
+        all = all.slice(0, hardLimit);
+        break;
+      }
+
+      offset = data.offset;
+      if (!offset) break;
     }
 
-    const data = await resp.json();
-    return data.records || [];
+    return all;
   }
 
   function mapRecords(records) {
-    return records.map((r) => ({ id: r.id, ...r.fields }));
+    return (records || []).map((r) => ({ id: r.id, ...r.fields }));
   }
 
   function pickSettled(result, key) {
@@ -136,12 +219,52 @@ export default async function handler(req, res) {
     };
   }
 
+  // Scores simples (puedes afinarlos cuando tengas tiempo)
+  function scoreAloj(a) {
+    let s = 0;
+    if (a.ideal_para_familias === true) s += 3;
+    if (normalizeStr(a.certificado_biosphere) === "si") s += 2;
+    if (normalizeStr(a.accesible) === "si") s += 1;
+    if (normalizeStr(a.admite_mas_de_una_mascota) === "si") s += 1;
+    if (a.web) s += 1;
+    if (a.maps_url) s += 1;
+    return s;
+  }
+
+  function scoreRest(r) {
+    let s = 0;
+    if (normalizeStr(r.terraza) === "si") s += 2;
+    if (r.web) s += 1;
+    if (r.maps_url) s += 1;
+    return s;
+  }
+
+  function scoreExp(e) {
+    let s = 0;
+    if (normalizeStr(e.certificado_biosphere) === "si") s += 2;
+    if (e.web) s += 1;
+    if (e.maps_url) s += 1;
+
+    if (Array.isArray(e.tipo_experiencia)) {
+      const t = e.tipo_experiencia.map(normalizeStr);
+      if (
+        t.includes("aire_libre") ||
+        t.includes("senderismo") ||
+        t.includes("naturaleza")
+      )
+        s += 1;
+    }
+    return s;
+  }
+
   try {
     const tasks = {
-      alojamientos: fetchTable(TABLE_ALOJAMIENTOS),
-      restaurantes: fetchTable(TABLE_RESTAURANTES),
-      experiencias: fetchTable(TABLE_EXPERIENCIAS),
-      playas: includePlayas ? fetchTable(TABLE_PLAYAS) : Promise.resolve([]),
+      alojamientos: fetchAllRecords(TABLE_ALOJAMIENTOS, { hardLimit: 800 }),
+      restaurantes: fetchAllRecords(TABLE_RESTAURANTES, { hardLimit: 800 }),
+      experiencias: fetchAllRecords(TABLE_EXPERIENCIAS, { hardLimit: 1200 }),
+      playas: includePlayas
+        ? fetchAllRecords(TABLE_PLAYAS, { hardLimit: 400 })
+        : Promise.resolve([]),
     };
 
     const keys = Object.keys(tasks);
@@ -157,36 +280,72 @@ export default async function handler(req, res) {
       if (error) errors[key] = error;
     });
 
-    // Post-procesado (igual que tu lógica original)
-    let alojamientos = out.alojamientos;
+    // ---------- ALOJAMIENTOS: filtrar + escoger 3 “mejores” con variación ----------
+    let alojamientosAll = uniqById(out.alojamientos).filter((a) =>
+      matchesMunicipioOrZona(a, municipio_preferido, zona)
+    );
+
     if (tamano_perro) {
-      alojamientos = alojamientos.filter(
+      alojamientosAll = alojamientosAll.filter(
         (a) =>
           Array.isArray(a.tamanos_admitidos) &&
           a.tamanos_admitidos.includes(tamano_perro)
       );
     }
-    alojamientos = alojamientos.slice(0, 3);
 
-    const restaurantes = out.restaurantes.slice(0, 3);
+    alojamientosAll.sort((a, b) => scoreAloj(b) - scoreAloj(a));
+    const alojTop = alojamientosAll.slice(0, 12);
+    const alojMix = seededShuffle(alojTop, requestId + "|aloj");
+    const alojamientos = alojMix.slice(0, 3);
 
-    let experiencias = out.experiencias;
+    // ---------- RESTAURANTES: filtrar + escoger 3 con variación ----------
+    let restaurantesAll = uniqById(out.restaurantes).filter((r) =>
+      matchesMunicipioOrZona(r, municipio_preferido, zona)
+    );
+
+    restaurantesAll.sort((a, b) => scoreRest(b) - scoreRest(a));
+    const restTop = restaurantesAll.slice(0, 15);
+    const restMix = seededShuffle(restTop, requestId + "|rest");
+    const restaurantes = restMix.slice(0, 3);
+
+    // ---------- EXPERIENCIAS: filtrar + escoger 6 con variación (para que entren rutas) ----------
+    let experienciasAll = uniqById(out.experiencias).filter((e) =>
+      matchesMunicipioOrZona(e, municipio_preferido, zona)
+    );
+
     if (tipo_viaje === "familias" || tipo_viaje === "familias_naturaleza") {
-      experiencias = experiencias.filter(
+      const fam = experienciasAll.filter(
         (e) => Array.isArray(e.ideal_para) && e.ideal_para.includes("familias")
       );
+      if (fam.length) experienciasAll = fam; // si no hay, no filtramos para no quedarnos sin rutas
     }
-    experiencias = experiencias.slice(0, 3);
 
-    const playas = out.playas.slice(0, 2);
+    experienciasAll.sort((a, b) => scoreExp(b) - scoreExp(a));
+    const expTop = experienciasAll.slice(0, 30);
+    const expMix = seededShuffle(expTop, requestId + "|exp");
+    const experiencias = expMix.slice(0, 6);
 
-    // Log útil para Vercel
+    // ---------- PLAYAS: filtrar + devolver hasta 9 (para variedad) ----------
+    let playasAll = uniqById(out.playas).filter((p) =>
+      matchesMunicipioOrZona(p, municipio_preferido, zona)
+    );
+
+    const playasMix = seededShuffle(playasAll, requestId + "|playa");
+    const playas = playasMix.slice(0, 9);
+
+    // Log útil para Vercel (no afecta al usuario)
     console.log(
       JSON.stringify({
         requestId,
         ok: Object.keys(errors).length === 0,
         errors: Object.keys(errors).length ? errors : null,
-        counts: {
+        counts_raw: {
+          alojamientos: out.alojamientos.length,
+          restaurantes: out.restaurantes.length,
+          experiencias: out.experiencias.length,
+          playas: out.playas.length,
+        },
+        counts_out: {
           alojamientos: alojamientos.length,
           restaurantes: restaurantes.length,
           experiencias: experiencias.length,
