@@ -1,5 +1,3 @@
-const { randomBytes } = require("crypto");
-
 export default async function handler(req, res) {
   // (Opcional) CORS para poder probar desde navegador/Hoppscotch sin Proxy
   res.setHeader("Access-Control-Allow-Origin", "*");
