@@ -1,7 +1,7 @@
-import crypto from "crypto";
+const { randomBytes } = require("crypto");
 
-export default async function handler(req, res) {
-  // (Opcional pero recomendado) CORS para pruebas desde navegador/Hoppscotch sin Proxy
+module.exports = async function handler(req, res) {
+  // (Opcional) CORS para poder probar desde navegador/Hoppscotch sin Proxy
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -14,7 +14,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Método no permitido. Usa POST." });
   }
 
-  const requestId = crypto.randomBytes(8).toString("hex");
+  const requestId = randomBytes(8).toString("hex");
 
   const {
     zona,
@@ -49,18 +49,15 @@ export default async function handler(req, res) {
   const TABLE_EXPERIENCIAS = "tblOaarE2MmWhMUef";
   const TABLE_PLAYAS = "tblbf2wiRYFMFLLZQ";
 
-  const headers = {
-    Authorization: `Bearer ${token}`,
-  };
+  const headers = { Authorization: `Bearer ${token}` };
 
   // Por defecto: si no se indica quiere_playa, asumimos que SÍ quiere playas
   const includePlayas = quiere_playa !== false;
 
-  // Escapar comillas para no romper filterByFormula
   const esc = (v) => String(v).replace(/'/g, "\\'");
 
   function buildFilterFormula() {
-    // Si quieres volver a activar filtros, este builder es seguro.
-    // (Puedes dejarlo activo: si no hay coincidencias, simplemente devolverá pocos registros)
-    const f
+    const filtros = [];
+    if (municipio_preferido) {
+      filtros
 
